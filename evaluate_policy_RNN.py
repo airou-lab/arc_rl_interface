@@ -1,62 +1,53 @@
-import os, sys, argparse
-import numpy as np
-from stable_baselines3.common.vec_env import DummyVecEnv, VecTransposeImage
-from stable_baselines3.common.monitor import Monitor
-from gymnasium.wrappers import TimeLimit
+import os, sys, argparse, numpy as np
 from sb3_contrib import RecurrentPPO
 
 sys.path.append(os.path.dirname(__file__))
-from unity_camera_env import UnityCameraEnv
-from live_unity_env import LiveUnityEnv
+from live_unity_env_NO_CROP import LiveUnityEnv
 
-def make_env(args, eval_mode=True):
-    if args.live:
-        env = LiveUnityEnv(host=args.host, port=args.port, img_size=tuple(args.img_size), max_steps=args.max_steps)
-    else:
-        env = UnityCameraEnv(capture_dir=args.capture_dir, img_size=tuple(args.img_size), max_steps=args.max_steps)
-    env.eval_mode = bool(eval_mode)
-    return env
-
-def run_episode(model, env, deterministic=True):
-    obs, info = env.reset()
-    done = False
-    truncated = False
-    total_reward = 0.0
-    state = None
-    episode_start = True
-    while not (done or truncated):
-        # VecTransposeImage expects HWC inside policy; here we pass CHW raw to env; model.predict expects HWC only when using VecEnv
-        # For direct env use, transpose to HWC:
-        obs_np = np.transpose(obs, (1,2,0))  # CHW->HWC
-        obs_np = np.expand_dims(obs_np, axis=0)  # batch
-        action, state = model.predict(obs_np, state=state, episode_start=np.array([episode_start]), deterministic=deterministic)
-        episode_start = False
-        obs, reward, done, truncated, info = env.step(action)
-        total_reward += float(reward)
-    return total_reward
+class ActionRepeatWrapper:
+    def __init__(self, env, repeat:int=1):
+        self.env = env; self.repeat = max(1, int(repeat))
+        self.action_space = env.action_space; self.observation_space = env.observation_space
+    def reset(self, **kw): return self.env.reset(**kw)
+    def step(self, action):
+        total=0.0; info={}
+        for i in range(self.repeat):
+            obs, r, d, t, info = self.env.step(action)
+            total += float(r)
+            if d or t: break
+        return obs, total, d, t, info
+    def close(self): return self.env.close()
+    def __getattr__(self,k): return getattr(self.env,k)
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--model_path", type=str, required=True)
-    p.add_argument("--live", action="store_true", default=False)
     p.add_argument("--host", type=str, default="127.0.0.1")
     p.add_argument("--port", type=int, default=5556)
-    p.add_argument("--capture_dir", type=str, default="../../Assets/Captures")
     p.add_argument("--img_size", type=int, nargs=2, default=[84,84])
     p.add_argument("--max_steps", type=int, default=500)
     p.add_argument("--episodes", type=int, default=5)
+    p.add_argument("--repeat", type=int, default=1)
     args = p.parse_args()
 
-    env = make_env(args, eval_mode=True)
+    env = LiveUnityEnv(host=args.host, port=args.port, img_size=tuple(args.img_size), max_steps=args.max_steps)
+    env = ActionRepeatWrapper(env, repeat=args.repeat)
+
     model = RecurrentPPO.load(args.model_path)
 
-    rewards = []
     for ep in range(args.episodes):
-        ep_r = run_episode(model, env, deterministic=True)
-        print(f"Episode {ep+1}: reward={ep_r:.3f}")
-        rewards.append(ep_r)
+        obs, info = env.reset()
+        state = None; episode_start = True; done=False; trunc=False; total=0.0
+        while not (done or trunc):
+            # model expects HWC; convert CHW->HWC and add batch
+            x = np.transpose(obs, (1,2,0))[None, ...]
+            action, state = model.predict(x, state=state, episode_start=np.array([episode_start]), deterministic=True)
+            episode_start = False
+            obs, r, done, trunc, info = env.step(action)
+            total += float(r)
+        print(f"Episode {ep+1}: reward={total:.3f}")
 
-    print(f"\nMean reward over {args.episodes} eps: {np.mean(rewards):.3f} ± {np.std(rewards):.3f}")
+    env.close()
 
 if __name__ == "__main__":
     main()
