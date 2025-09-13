@@ -14,7 +14,6 @@ import warnings
 from live_unity_env import LiveUnityEnv as UnityCameraEnv, UnityEnvConfig  # noqa: F401
 
 __all__ = ["UnityCameraEnv", "UnityEnvConfig"]
-
 # Gentle heads-up when this shim is imported
 warnings.warn(
     (

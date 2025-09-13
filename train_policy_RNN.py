@@ -47,7 +47,6 @@ def make_env_fn(host: str, port: int, img_size, max_steps: int, repeat: int) -> 
         return env
     return _thunk
 
-
 def main():
     p = argparse.ArgumentParser(description="Train Recurrent PPO on Unity RGB stream (passive).")
     p.add_argument("--host", type=str, default="127.0.0.1")
@@ -104,7 +103,6 @@ def main():
     final_path = os.path.join(models_dir, "final_model.zip")
     model.save(final_path)
     print(f"[main] saved: {final_path}")
-
 
 if __name__ == "__main__":
     main()

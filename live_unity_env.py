@@ -71,7 +71,7 @@ class UnityEnvConfig:
     max_steps: int = 500
     connect_timeout_s: float = 15.0
     socket_timeout_s: float = 15.0
-    action_repeat: int = 1  # prefer using ActionRepeatWrapper, but kept here for convenience
+    action_repeat: int = 1 # prefer using ActionRepeatWrapper, but kept here for convenience
 
 # env
 class LiveUnityEnv(gym.Env):
