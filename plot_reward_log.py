@@ -1,30 +1,40 @@
+"""
+Plot SB3 monitor.csv or our CSV run log.
+"""
+from __future__ import annotations
 import argparse
-from pathlib import Path
 import pandas as pd
 import matplotlib.pyplot as plt
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--log_csv", type=str, required=True, help="Path to SB3 monitor.csv")
-    p.add_argument("--out", type=str, default=None, help="Path to save PNG (optional)")
+    p.add_argument("path", type=str, help="monitor.csv or run.csv")
+    p.add_argument("--out", type=str, default=None, help="save figure path")
     args = p.parse_args()
 
-    df = pd.read_csv(args.log_csv, skiprows=1)  # SB3 monitor: first row is a header comment
-    if df.empty:
-        print("No data in monitor.csv")
+    df = pd.read_csv(args.path, comment="#")
+    if {"t", "r"}.issubset(df.columns): # SB3 monitor schema
+        x = df["t"].values
+        y = df["r"].values
+        title = "Monitor Reward"
+    elif {"step", "reward"}.issubset(df.columns):
+        x = df["step"].values
+        y = df["reward"].values
+        title = "Run Reward"
+    else:
+        print("Unknown CSV format:", df.columns.tolist())
         return
 
-    # Plot episode reward vs episode index
-    plt.figure()
-    plt.plot(df['r'].values, label='episode_reward')
-    plt.xlabel('Episode')
-    plt.ylabel('Reward')
-    plt.title('Episode Rewards')
-    plt.legend()
+    plt.figure(figsize=(8, 4))
+    plt.plot(x, y, lw=1)
+    plt.xlabel("Step")
+    plt.ylabel("Reward")
+    plt.title(title)
+    plt.grid(True, alpha=0.3)
+
     if args.out:
-        Path(args.out).parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(args.out, bbox_inches='tight')
-        print(f"Saved plot to {args.out}")
+        plt.savefig(args.out, bbox_inches="tight")
+        print("saved:", args.out)
     else:
         plt.show()
 

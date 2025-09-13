@@ -1,66 +1,59 @@
-import socket, struct, argparse
+"""
+Run a trained RecurrentPPO model against the live Unity scene.
+This is a *client* that connects to RLClientSender, reads frames,
+and sends actions predicted by the model. (Name kept for continuity.)
+
+Example:
+python inference_server_RNN.py --model models/rppo_YYYYMMDD_HHMMSS/final_model.zip
+"""
+from __future__ import annotations
+import argparse
 import numpy as np
-import cv2
 from sb3_contrib import RecurrentPPO
+from live_unity_env import LiveUnityEnv, UnityEnvConfig
 
-CROP_TOP_FRAC = 0.25
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument("--model", type=str, required=True)
+    p.add_argument("--host", type=str, default="127.0.0.1")
+    p.add_argument("--port", type=int, default=5556)
+    p.add_argument("--img_size", type=int, nargs=2, default=[84, 84])
+    p.add_argument("--max_steps", type=int, default=500)
+    p.add_argument("--repeat", type=int, default=1)
+    p.add_argument("--episodes", type=int, default=10)
+    args = p.parse_args()
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--model_path", type=str, required=True)
-parser.add_argument("--port", type=int, default=5555)
-parser.add_argument("--img_w", type=int, default=84)
-parser.add_argument("--img_h", type=int, default=84)
-args = parser.parse_args()
+    cfg = UnityEnvConfig(
+        host=args.host, port=args.port,
+        img_width=args.img_size[0], img_height=args.img_size[1],
+        max_steps=args.max_steps, action_repeat=args.repeat,
+    )
+    env = LiveUnityEnv(cfg)
 
-model = RecurrentPPO.load(args.model_path)
+    model = RecurrentPPO.load(args.model)
 
-def recv_exact(sock, n):
-    data = b""
-    while len(data) < n:
-        chunk = sock.recv(n - len(data))
-        if not chunk:
-            return None
-        data += chunk
-    return data
+    for ep in range(args.episodes):
+        obs, info = env.reset()
+        done = False
+        truncated = False
+        ep_rew = 0.0
+        lstm_state = None
+        episode_start = True
 
-def preprocess(jpeg_bytes):
-    img = cv2.imdecode(np.frombuffer(jpeg_bytes, np.uint8), cv2.IMREAD_COLOR)
-    if img is None:
-        return None
-    h = img.shape[0]
-    img = img[int(h * CROP_TOP_FRAC):]
-    img = cv2.resize(img, (args.img_w, args.img_h))
-    return img  # HWC uint8
+        while not (done or truncated):
+            action, lstm_state = model.predict(
+                observation=obs,
+                state=lstm_state,
+                episode_start=np.array([episode_start], dtype=bool),
+                deterministic=False,
+            )
+            episode_start = False
+            obs, reward, done, truncated, info = env.step(action)
+            ep_rew += float(reward)
 
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(("0.0.0.0", args.port))
-    s.listen(1)
-    print(f"Listening on 0.0.0.0:{args.port} ...")
+        print(f"[ep {ep+1}] reward={ep_rew:.3f} done={done} trunc={truncated}")
 
-    while True:
-        conn, addr = s.accept()
-        print("Client connected:", addr)
-        with conn:
-            state = None
-            episode_start = True
-            while True:
-                hdr = recv_exact(conn, 4)
-                if hdr is None:
-                    break
-                (length,) = struct.unpack("!I", hdr)
-                img_bytes = recv_exact(conn, length)
-                if img_bytes is None:
-                    break
+    env.close()
 
-                obs = preprocess(img_bytes)
-                if obs is None:
-                    break
-                obs = np.expand_dims(obs, axis=0)  # batch dimension HWC
-                action, state = model.predict(obs, state=state, episode_start=np.array([episode_start]), deterministic=True)
-                episode_start = False
-
-                action = np.array(action).flatten()
-                steer = float(np.clip(action[0], -1.0, 1.0))
-                throttle = float(np.clip(action[1], 0.0, 1.0))
-                conn.sendall(struct.pack("!ff", steer, throttle))
+if __name__ == "__main__":
+    main()

@@ -1,26 +1,25 @@
-import argparse
-from unity_camera_env import UnityCameraEnv
+"""
+Quick smoke test for LiveUnityEnv without SB3.
+"""
+from __future__ import annotations
+import numpy as np
+from live_unity_env import LiveUnityEnv, UnityEnvConfig
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--capture_dir', type=str, default='../../Assets/Captures')
-    ap.add_argument('--img_w', type=int, default=84)
-    ap.add_argument('--img_h', type=int, default=84)
-    ap.add_argument('--steps', type=int, default=10)
-    args = ap.parse_args()
-
-    env = UnityCameraEnv(capture_dir=args.capture_dir, img_size=(args.img_w, args.img_h), max_steps=args.steps)
+    env = LiveUnityEnv(UnityEnvConfig())
     obs, info = env.reset()
-    print('Observation shape:', obs.shape, 'info:', info)
-    total = 0.0
-    for t in range(args.steps):
-        action = env.action_space.sample()
-        obs, r, done, trunc, info = env.step(action)
-        total += r
-        print(f'Step {t+1}: reward={r:.3f} done={done} trunc={trunc}')
-        if done or trunc:
-            break
-    print('Total reward:', total)
+    print("reset:", obs.shape, info)
 
-if __name__ == '__main__':
+    total = 0.0
+    for t in range(50):
+        action = np.array([0.2, 0.4], dtype=np.float32)
+        obs, reward, done, truncated, info = env.step(action)
+        total += float(reward)
+        print(f"t={t} r={reward:+.3f} done={done} trunc={truncated}")
+        if done or truncated:
+            break
+    print("return:", total)
+    env.close()
+
+if __name__ == "__main__":
     main()

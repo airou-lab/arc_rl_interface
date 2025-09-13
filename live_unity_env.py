@@ -1,93 +1,193 @@
-import socket, struct
-from typing import Optional, Dict, Any, Tuple
-import numpy as np
-import cv2
+"""
+LiveUnityEnv
+Gymnasium-compatible environment that connects to the Unity scene
+(RLClientSender.cs) over TCP and exchanges:
+
+Client (Python) -> Unity:
+    - Reset: send a single byte 'R'
+    - Step: send 8 bytes = big-endian float32 steer, float32 throttle
+
+Unity -> Client (Pythin):
+    - 4-byte big-endian uint32: length N of JPEG payload (can be zero)
+    - N bytes: JPEG frame (RGB)
+    - 6-byte tail: big-endian float32 reward, 1 byte done, 1 byte truncated
+
+Obs: unit8 RGB image, shape (H, W, 3), HWC
+Action: Box([-1, 0], [1, 1]) -> (steer, throttle)
+Reward/Done: Propagated from Unity
+
+This env is minimal and passive: the policy only sees the RGB frame and sends
+continuous actions.
+"""
+from __future__ import annotations
+import socket
+import struct
+import time
+from dataclasses import dataclass
+from typing import Tuple, Dict, Any, Optional
 import gymnasium as gym
 from gymnasium import spaces
+import numpy as np
+from PIL import Image
+import io
 
+# helpers
+def _read_exact(sock: socket.socket, n: int) -> bytes:
+    """Read exactly n bytes or raise ConnectionError."""
+    buf = bytearray()
+    while len(buf) < n:
+        chunk = sock.recv(n - len(buf))
+        if not chunk:
+            raise ConnectionError("Socket closed while reading")
+        buf.extend(chunk)
+    return bytes(buf)
+
+def _be_f32_to_bytes(x: float) -> bytes:
+    return struct.pack(">f", float(x))
+
+def _decode_jpeg_to_rgb(data: bytes, expected_hw: Tuple[int, int]) -> np.ndarray:
+    """Decode a JPEG bytes object to RGB uint8 HWC."""
+    if not data:
+        # If Unity sends zero-length (shouldn't), return black frame
+        h, w = expected_hw
+        return np.zeros((h, w, 3), dtype=np.uint8)
+
+    with Image.open(io.BytesIO(data)) as im:
+        im = im.convert("RGB")
+        # Unity renders the exact size; resize only if mismatched
+        if im.size != (expected_hw[1], expected_hw[0]):
+            im = im.resize((expected_hw[1], expected_hw[0]), Image.BILINEAR)
+        arr = np.asarray(im, dtype=np.uint8)
+        assert arr.ndim == 3 and arr.shape[2] == 3, f"bad image shape {arr.shape}"
+        return arr
+
+# config
+@dataclass
+class UnityEnvConfig:
+    host: str = "127.0.0.1"
+    port: int = 5556
+    img_width: int = 84
+    img_height: int = 84
+    max_steps: int = 500
+    connect_timeout_s: float = 15.0
+    socket_timeout_s: float = 15.0
+    action_repeat: int = 1  # prefer using ActionRepeatWrapper, but kept here for convenience
+
+# env
 class LiveUnityEnv(gym.Env):
-    """
-    Live passive env over TCP.
-    Unity sends already-resized frames (e.g., 84x84). No Python crop.
-    Protocol:
-      RESET: send b'R' -> recv len|jpeg|reward|done|truncated
-      STEP:  send !ff steer,throttle -> recv len|jpeg|reward|done|truncated
-    """
     metadata = {"render_modes": []}
 
-    def __init__(self, host="127.0.0.1", port=5556, img_size=(84,84), max_steps=500):
+    def __init__(self, cfg: UnityEnvConfig | None = None, **kwargs):
         super().__init__()
-        self.host, self.port = host, port
-        self.img_size = tuple(img_size)
-        self.max_steps = max_steps
-        self.sock = None
-        self.steps = 0
-        self.action_space = spaces.Box(low=np.array([-1.0,0.0],np.float32), high=np.array([1.0,1.0],np.float32), dtype=np.float32)
-        self.observation_space = spaces.Box(low=0, high=255, shape=(3, self.img_size[1], self.img_size[0]), dtype=np.uint8)
+        if cfg is None:
+            cfg = UnityEnvConfig(**kwargs)
+        # allow kwargs override
+        for k, v in kwargs.items():
+            if hasattr(cfg, k):
+                setattr(cfg, k, v)
+        self.cfg = cfg
+        h, w = self.cfg.img_height, self.cfg.img_width
+        self.observation_space = spaces.Box(low=0, high=255, shape=(h, w, 3), dtype=np.uint8)
+        self.action_space = spaces.Box(low=np.array([-1.0, 0.0], dtype=np.float32),
+                                       high=np.array([+1.0, 1.0], dtype=np.float32),
+                                       dtype=np.float32)
+        self._sock: Optional[socket.socket] = None
+        self._step_count: int = 0
+        self._last_info: Dict[str, Any] = {}
 
-    def _connect(self):
-        if self.sock: return
+    # socket lifecycle
+    def _connect(self) -> None:
+        if self._sock is not None:
+            return
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect((self.host, self.port))
-        self.sock = s
+        s.settimeout(self.cfg.connect_timeout_s)
+        s.connect((self.cfg.host, self.cfg.port))
+        s.settimeout(self.cfg.socket_timeout_s)
+        self._sock = s
 
-    def _recv_exact(self, n:int):
-        data = b""
-        while len(data) < n:
-            chunk = self.sock.recv(n - len(data))
-            if not chunk:
-                return None
-            data += chunk
-        return data
-
-    def _recv_obs_reward_done(self):
-        hdr = self._recv_exact(4)
-        if hdr is None: return None, 0.0, True, False
-        (length,) = struct.unpack("!I", hdr)
-        img_bytes = self._recv_exact(length)
-        if img_bytes is None: return None, 0.0, True, False
-        img = cv2.imdecode(np.frombuffer(img_bytes, np.uint8), cv2.IMREAD_COLOR)
-        if img is None: return None, 0.0, True, False
-        # Ensure size matches declared
-        if (img.shape[1], img.shape[0]) != self.img_size:
-            img = cv2.resize(img, self.img_size)
-        tail = self._recv_exact(6)
-        if tail is None or len(tail)!=6: return None, 0.0, True, False
-        reward = struct.unpack("!f", tail[:4])[0]
-        done = bool(tail[4]); trunc = bool(tail[5])
-        chw = np.transpose(img, (2,0,1)).astype(np.uint8)
-        return chw, float(reward), done, trunc
-
-    def reset(self, *, seed=None, options=None):
-        super().reset(seed=seed)
-        self._connect()
-        self.sock.sendall(b'R')
-        self.steps = 0
-        obs, _, done, _ = self._recv_obs_reward_done()
-        if obs is None or done:
-            # retry once
-            self.sock.close(); self.sock=None
-            self._connect(); self.sock.sendall(b'R')
-            obs, _, _, _ = self._recv_obs_reward_done()
-        return obs, {"reset": True}
-
-    def step(self, action):
-        steer = float(np.clip(action[0], -1.0, 1.0))
-        throttle = float(np.clip(action[1], 0.0, 1.0))
-        self.sock.sendall(struct.pack("!ff", steer, throttle))
-        obs, reward, done, trunc = self._recv_obs_reward_done()
-        self.steps += 1
-        if self.max_steps and self.steps >= self.max_steps:
-            trunc = True
-        if obs is None:
-            done = True
-            obs = np.zeros((3, self.img_size[1], self.img_size[0]), np.uint8)
-        return obs, reward, done, trunc, {}
-
-    def close(self):
-        if self.sock:
+    def _close_socket(self) -> None:
+        if self._sock is not None:
             try:
-                self.sock.shutdown(socket.SHUT_RDWR)
+                self._sock.close()
             except Exception:
                 pass
-            self.sock.close(); self.sock=None
+            self._sock = None
+
+    # gym API
+    def reset(self, *, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None):
+        super().reset(seed=seed)
+        self._connect()
+
+        # Request a new episode
+        assert self._sock is not None
+        self._sock.sendall(b"R")
+
+        # Receive the first observation immediately after reset
+        obs, reward, done, trunc, info = self._recv_step()
+        self._step_count = 0
+        self._last_info = info
+        return obs, info
+
+    def step(self, action: np.ndarray):
+        action = np.asarray(action, dtype=np.float32).reshape(2)
+        steer = float(np.clip(action[0], -1.0, 1.0))
+        throttle = float(np.clip(action[1], 0.0, 1.0))
+
+        # Repeat (kept here for convenience; can also wrap with ActionRepeatWrapper)
+        total_reward = 0.0
+        last_obs = None
+        last_done = False
+        last_trunc = False
+        info = {}
+
+        repeats = max(1, int(self.cfg.action_repeat))
+        for _ in range(repeats):
+            self._send_action(steer, throttle)
+            obs, reward, done, trunc, info = self._recv_step()
+            total_reward += float(reward)
+            last_obs = obs
+            last_done = done
+            last_trunc = trunc
+            self._step_count += 1
+            if done or trunc:
+                break
+        return last_obs, total_reward, last_done, last_trunc, info
+
+    def close(self):
+        self._close_socket()
+        return super().close()
+
+    # protocol helpers
+    def _send_action(self, steer: float, throttle: float) -> None:
+        """Send big-endian float32 steer and throttle."""
+        assert self._sock is not None
+        self._sock.sendall(_be_f32_to_bytes(steer) + _be_f32_to_bytes(throttle))
+
+    def _recv_step(self):
+        """
+        Receive one step:
+          - 4-byte length N
+          - N bytes JPEG
+          - 4-byte float reward + 1B done + 1B truncated
+        """
+        assert self._sock is not None
+        # length
+        hdr = _read_exact(self._sock, 4)
+        (n,) = struct.unpack(">I", hdr)
+        # jpeg
+        jpeg = _read_exact(self._sock, n) if n > 0 else b""
+        # tail
+        tail = _read_exact(self._sock, 6)
+        (reward,) = struct.unpack(">f", tail[:4])
+        done = bool(tail[4])
+        truncated = bool(tail[5])
+
+        obs = _decode_jpeg_to_rgb(jpeg, expected_hw=(self.cfg.img_height, self.cfg.img_width))
+        info = {
+            "step": self._step_count,
+            "jpeg_bytes": n,
+            "reward": float(reward),
+            "done": done,
+            "truncated": truncated,
+        }
+        return obs, float(reward), done, truncated, info

@@ -1,38 +1,57 @@
-import socket, struct, cv2, numpy as np
+"""
+Minimal client to sanity-check the Unity TCP interface.
+
+- Sends a reset 'R'
+- Then alternates steering left/right while holding throttle
+- Prints reward, done, truncated every ~0.03 s
+"""
+from __future__ import annotations
+import socket
+import struct
+import time
 
 HOST, PORT = "127.0.0.1", 5556
 
-def recv_exact(s, n):
-    data = b""
-    while len(data) < n:
-        chunk = s.recv(n - len(data))
+def be_f32(x: float) -> bytes:
+    return struct.pack(">f", float(x))
+
+def read_exact(s: socket.socket, n: int) -> bytes:
+    b = bytearray()
+    while len(b) < n:
+        chunk = s.recv(n - len(b))
         if not chunk:
             raise ConnectionError("socket closed")
-        data += chunk
-    return data
+        b.extend(chunk)
+    return bytes(b)
 
-with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-    s.connect((HOST, PORT))
-    print("Connected to Unity.")
-    # Reset -> Unity should send first frame + tail
-    s.sendall(b"R")
-    L = struct.unpack("!I", recv_exact(s, 4))[0]
-    jpeg = recv_exact(s, L)
-    reward = struct.unpack("!f", recv_exact(s, 4))[0]
-    done = bool(recv_exact(s,1)[0]); truncated = bool(recv_exact(s,1)[0])
-    img = cv2.imdecode(np.frombuffer(jpeg, np.uint8), cv2.IMREAD_COLOR)
-    print(f"First frame: {None if img is None else img.shape}, reward={reward}, done={done}, truncated={truncated}")
+def main():
+    with socket.create_connection((HOST, PORT), timeout=10) as s:
+        print("Connected to Unity.")
+        s.sendall(b"R")  # reset
 
-    # Drive forward gently for 100 steps
-    for t in range(100):
-        steer, throttle = 0.0, 0.3
-        s.sendall(struct.pack("!ff", float(steer), float(throttle)))
-        L = struct.unpack("!I", recv_exact(s, 4))[0]
-        jpeg = recv_exact(s, L)
-        tail = recv_exact(s, 6)
-        reward = struct.unpack("!f", tail[:4])[0]
-        done = bool(tail[4]); truncated = bool(tail[5])
-        if t % 10 == 0:
-            print(f"t={t} reward={reward:.3f} done={done} trunc={truncated}")
-        if done or truncated:
-            break
+        # read first obs
+        n = struct.unpack(">I", read_exact(s, 4))[0]
+        if n:
+            _ = read_exact(s, n)
+        tail = read_exact(s, 6)
+        rew = struct.unpack(">f", tail[:4])[0]
+        done, trunc = tail[4], tail[5]
+        print(f"First frame: reward={rew}, done={bool(done)}, truncated={bool(trunc)}")
+
+        for t in range(400):
+            steer = 0.6 if (t // 60) % 2 == 0 else -0.6
+            throttle = 0.5
+            s.sendall(be_f32(steer) + be_f32(throttle))
+
+            n = struct.unpack(">I", read_exact(s, 4))[0]
+            if n: _ = read_exact(s, n)
+            tail = read_exact(s, 6)
+            r = struct.unpack(">f", tail[:4])[0]
+            d, tr = bool(tail[4]), bool(tail[5])
+            print(f"t={t} reward={r:+.3f} done={d} trunc={tr}")
+            if d or tr:
+                break
+            time.sleep(0.03)
+
+if __name__ == "__main__":
+    main()
