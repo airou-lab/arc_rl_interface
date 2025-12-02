@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import numpy as np
 from sb3_contrib import RecurrentPPO
-from live_unity_env import LiveUnityEnv, UnityEnvConfig
+from live_unity_env import LiveUnityEnv
 
 def main():
     p = argparse.ArgumentParser()
@@ -23,12 +23,13 @@ def main():
     p.add_argument("--episodes", type=int, default=10)
     args = p.parse_args()
 
-    cfg = UnityEnvConfig(
-        host=args.host, port=args.port,
-        img_width=args.img_size[0], img_height=args.img_size[1],
-        max_steps=args.max_steps, action_repeat=args.repeat,
+    env = LiveUnityEnv(
+        host = args.host,
+        port = args.port,
+        img_width = args.img_size[0],
+        img_height = args.img_size[1],
+        max_steps = args.max_steps,
     )
-    env = LiveUnityEnv(cfg)
 
     model = RecurrentPPO.load(args.model)
 
