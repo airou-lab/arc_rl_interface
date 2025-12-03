@@ -294,3 +294,19 @@ class LiveUnityEnv(gym.Env):
             except: pass
             self.client_socket = None
     def __del__(self): self.close()
+
+
+from dataclasses import dataclass
+from typing import Optional
+
+@dataclass
+class UnityEnvConfig:
+    """Configuration for the LiveUnityEnv."""
+    host: str = "127.0.0.1"
+    port: int = 5556
+    img_width: int = 128
+    img_height: int = 128
+    max_steps: int = 500
+    timeout: float = 120.0
+    verbose: bool = False
+    step_delay: float = 0.0

@@ -396,6 +396,11 @@ class HierarchicalPathPlanningPolicy(RecurrentActorCriticPolicy):
 
     def get_distribution(self, obs, lstm_states, episode_starts):
         """Get action distribution (for deterministic action selection)."""
+        # Handle both RNNStates and tuple formats
+        if isinstance(lstm_states, tuple) and not hasattr(lstm_states, 'pi'):
+            # Parent class passed tuple - convert to RNNStates
+            lstm_states = RNNStates(pi=lstm_states, vf=lstm_states)
+
         features = self.extract_features(obs)
         latent_pi, lstm_states_pi = self._process_sequence(
             features, lstm_states.pi, episode_starts, self.lstm_actor
@@ -414,7 +419,7 @@ class HierarchicalPathPlanningPolicy(RecurrentActorCriticPolicy):
 
         return (
             self._get_action_dist_from_latent(control_features),
-            RNNStates(pi=lstm_states_pi, vf=lstm_states.vf)
+            lstm_states_pi
         )
 
     def predict_values(self, obs, lstm_states, episode_starts):

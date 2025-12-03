@@ -1,36 +1,32 @@
 """
 Run a trained RecurrentPPO model against the live Unity scene.
-This is a *client* that connects to RLClientSender, reads frames,
-and sends actions predicted by the model. (Name kept for continuity.)
-
-Example:
-python inference_server_RNN.py --model models/rppo_YYYYMMDD_HHMMSS/final_model.zip
 """
 from __future__ import annotations
 import argparse
+from dataclasses import asdict
+
 import numpy as np
 from sb3_contrib import RecurrentPPO
-from live_unity_env import LiveUnityEnv
+from live_unity_env import LiveUnityEnv, UnityEnvConfig
+
 
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--model", type=str, required=True)
     p.add_argument("--host", type=str, default="127.0.0.1")
     p.add_argument("--port", type=int, default=5556)
-    p.add_argument("--img_size", type=int, nargs=2, default=[84, 84])
+    p.add_argument("--img_size", type=int, nargs=2, default=[128, 128])
     p.add_argument("--max_steps", type=int, default=500)
     p.add_argument("--repeat", type=int, default=1)
     p.add_argument("--episodes", type=int, default=10)
+    p.add_argument("--deterministic", action="store_true")
     args = p.parse_args()
 
-    env = LiveUnityEnv(
-        host = args.host,
-        port = args.port,
-        img_width = args.img_size[0],
-        img_height = args.img_size[1],
-        max_steps = args.max_steps,
+    cfg = UnityEnvConfig(
+        host=args.host, port=args.port,
+        img_width=args.img_size[0], img_height=args.img_size[1],
     )
-
+    env = LiveUnityEnv(**asdict(cfg))
     model = RecurrentPPO.load(args.model)
 
     for ep in range(args.episodes):
@@ -38,23 +34,29 @@ def main():
         done = False
         truncated = False
         ep_rew = 0.0
+        step_count = 0
+
+        # Let model handle LSTM state initialization
         lstm_state = None
-        episode_start = True
+        episode_start = np.array([True], dtype=bool)
 
         while not (done or truncated):
             action, lstm_state = model.predict(
                 observation=obs,
                 state=lstm_state,
-                episode_start=np.array([episode_start], dtype=bool),
-                deterministic=False,
+                episode_start=episode_start,
+                deterministic=args.deterministic,
             )
-            episode_start = False
+            episode_start = np.array([False], dtype=bool)
+
             obs, reward, done, truncated, info = env.step(action)
             ep_rew += float(reward)
+            step_count += 1
 
-        print(f"[ep {ep+1}] reward={ep_rew:.3f} done={done} trunc={truncated}")
+        print(f"[ep {ep+1}] steps={step_count} reward={ep_rew:.3f} done={done} trunc={truncated}")
 
     env.close()
+
 
 if __name__ == "__main__":
     main()
