@@ -279,8 +279,21 @@ class CustomHierarchicalPPO(RecurrentPPO):
             goal_weight=0.2,
         )
 
-        # Get trajectory store
-        self._trajectory_store = get_trajectory_store()
+        # Get trajectory store (don't store the instance variable for pickling)
+        # We'll fetch it fresh each time in _compute_waypoint_auxiliary_loss
+
+    def __getstate__(self):
+        """Exclude un-pickleable objects from serialization."""
+        state = self.__dict__.copy()
+        # Remove trajectory store if it exists
+        state.pop('_trajectory_store', None)
+        return state
+
+    def __setstate__(self, state):
+        """Restore state after unpickling."""
+        self.__dict__.update(state)
+        # Don't restore _trajectory_store - it will be fetched fresh when needed
+
 
     def train(self) -> None:
         """
@@ -400,9 +413,10 @@ class CustomHierarchicalPPO(RecurrentPPO):
         """
         Compute the waypoint auxiliary loss for the current batch.
         """
-        # Get trajectory data from the store
-        trajectory_data = self._trajectory_store.get_trajectory(env_id=0)
-        safety_mask = self._trajectory_store.get_safety_mask(env_id=0)
+        # Fetch trajectory store fresh (not from instance variable)
+        trajectory_store = get_trajectory_store()
+        trajectory_data = trajectory_store.get_trajectory(env_id=0)
+        safety_mask = trajectory_store.get_safety_mask(env_id=0)
 
         if trajectory_data is None or len(trajectory_data.get('positions', [])) < 10:
             return torch.tensor(0.0, device=self.device)
