@@ -8,6 +8,7 @@ from dataclasses import asdict
 import numpy as np
 from sb3_contrib import RecurrentPPO
 from live_unity_env import LiveUnityEnv, UnityEnvConfig
+from stable_baselines3.common.utils import get_schedule_fn
 
 
 def main():
@@ -27,7 +28,15 @@ def main():
         img_width=args.img_size[0], img_height=args.img_size[1],
     )
     env = LiveUnityEnv(**asdict(cfg))
-    model = RecurrentPPO.load(args.model)
+    model = RecurrentPPO.load(
+        args.model,
+        custom_objects={
+            "clip_range": get_schedule_fn(0.2), # Limits policy updates to +-20% change
+            "lr_schedule": get_schedule_fn(3e-4), # Learning rate of 0.0003
+            "waypoint_criterion": None, # Not needed for inference currently
+        },
+        device="cpu" # Force CPU
+    )
 
     for ep in range(args.episodes):
         obs, info = env.reset()
