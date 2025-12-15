@@ -15,8 +15,8 @@ setup(
     zip_safe=True,
     maintainer='airou',
     maintainer_email='arikak@ou.edu',
-    description='TODO: Package description',
-    license='TODO: License declaration',
+    description='https://airou-lab.github.io/arcpro_ros2_website/',
+    license='MIT',
     extras_require={
         'test': [
             'pytest',
