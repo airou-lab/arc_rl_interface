@@ -14,7 +14,7 @@ HOST = '0.0.0.0' # Listen on all interfaces
 PORT = 5556
 IMG_SIZE = (128, 128)  # Must match training
 MAX_SPEED = 0.5 # We can change this later if it becomes weird
-MAX_STEER = 0.4 # Radians (at steer=1.0) ~23 degrees
+MAX_STEER = 0.4 # Radians (at steer=1.0) ~23 degrees todo may need to be changed later on..
 
 CAMERA_TOPIC = '/camera/camera/color/image_raw' # Confirm this later.. (realsense topic)
 DRIVE_TOPIC = '/drive'

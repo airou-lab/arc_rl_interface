@@ -3,9 +3,11 @@
 <package format="3">
   <name>bridge</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
-  <maintainer email="arikak@ou.edu">airou</maintainer>
-  <license>TODO: License declaration</license>
+  <description>A small package for the sim2real bridge built for the arcpro robots
+see here for more info:  https://airou-lab.github.io/arcpro_ros2_website/
+  </description>
+  <maintainer email="arikak@ou.edu"> Arika K, AIROU</maintainer>
+  <license>MIT</license>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
