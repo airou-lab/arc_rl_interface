@@ -1,5 +1,6 @@
 # Warning! Autogen code!
 # This servers as the bridge between the Reinforcement Learning Model and its commands to the real robot
+# Warning! This may be deprcated in the future! (Looking at you unity ros bridge..)
 # For full documentation please see our docs https://airou-lab.github.io/arcpro_ros2_website/
 #
 
@@ -14,8 +15,8 @@ import cv2
 import numpy as np
 import threading
 
-# --- CONFIGURATION ---
-HOST = '0.0.0.0'  # Listen on all interfaces
+
+HOST = '0.0.0.0'  # May have to set to be more specific..
 PORT = 5556
 img_size = (84, 84) # double check again..
 MAX_SPEED = 0.5  # We can change this later if it becomes weird
