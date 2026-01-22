@@ -103,8 +103,15 @@ class HierarchicalPathPlanningPolicy(RecurrentActorCriticPolicy):
         self.command_blend_factor = command_blend_factor
         self.steering_blend_factor = steering_blend_factor
         self.progressive_curvature_exp = progressive_curvature_exp
-        self.max_deviation_meters = max_deviation_meters
-        self.waypoint_spacing = 4.0  # meters between waypoints
+
+        # FIX: Use waypoint_horizon to compute spacing, not hardcoded 4.0m!
+        # With horizon=2.5m and 5 waypoints: spacing = 0.5m
+        # Waypoints at: 0.5, 1.0, 1.5, 2.0, 2.5m (mean ≈ 1.5m)
+        self.waypoint_spacing = waypoint_horizon / num_waypoints
+
+        # FIX: Cap max_deviation to be reasonable for the horizon
+        # Deviations larger than the horizon don't make sense
+        self.max_deviation_meters = min(max_deviation_meters, waypoint_horizon * 0.8)
 
         if net_arch is None:
             net_arch = dict(pi=[64], vf=[64])
