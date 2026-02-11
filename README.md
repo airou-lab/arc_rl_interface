@@ -1,3 +1,6 @@
+# OLD FRAMEWORK BASED ON UNITY, 
+Now deprecated
+
 # Hierarchical Sim-to-Real Autonomous Driving Framework
 
 This repository contains a research-grade Reinforcement Learning framework designed for end-to-end autonomous driving. The project implements a **Hierarchical Recurrent Proximal Policy Optimization (H-PPO)** agent that decouples the driving task into three distinct stages: **Perception**, **Trajectory Planning**, and **Control**.
